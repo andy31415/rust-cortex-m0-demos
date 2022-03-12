@@ -2,7 +2,7 @@
 
 A Program demo running on a Cortex-M0.
 Sample boards available for example at 
-[AliExpress search for STM32F103C8T6](https://www.aliexpress.com/wholesale?SearchText=stm32f103c8t6)
+[AliExpress search for STM32F030C8T6](https://www.aliexpress.com/wholesale?SearchText=stm32f030c8t6)
 
 Extra hardware:
   - A SSD1306 screen, eg:
