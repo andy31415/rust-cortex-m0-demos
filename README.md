@@ -6,11 +6,14 @@ Sample boards available for example at
 
 # Current branch information
 
-This is a starter project, just changed for:
-  - Setup to compile on CortexM0
-  - Setup to use [probe-run](https://docs.rs/crate/probe-run/latest)
-  - Output log information via RTT (see [rtt-target](https://docs.rs/rtt-target/latest/rtt_target/) for docs) 
-  - Blink the onboard LED
+This is using PWM and driving a servo. Extra hardware used in the example:
+  - A logic level shifter since servos require 5V. Sample [search](https://www.google.com/search?q=bidirectional+shifter+BSS138)
+    for a BSS138 shifter
+  - A SG90 Servo. See its [datasheet](https://www.google.com/search?q=SG90+datasheet)
+
+Servo is connectedd to the A8 pin (through the logic level shifter).
+
+Corresponding video: https://www.youtube.com/watch?v=fgChU18a5vs
 
 # Project base
 

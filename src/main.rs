@@ -7,7 +7,7 @@ use panic_rtt_target as _;
 use cortex_m_rt::entry;
 use stm32f0xx_hal as hal;
 
-use crate::hal::{delay::Delay, pac, prelude::*};
+use crate::hal::{delay::Delay, pac, prelude::*, pwm};
 
 use rtt_target::{rprintln, rtt_init_print};
 
@@ -26,14 +26,23 @@ fn main() -> ! {
 
     let mut delay = Delay::new(cortex_peripherals.SYST, &rcc);
 
-    let gpio = pac_peripherals.GPIOC.split(&mut rcc);
-    let mut led = cortex_m::interrupt::free(move |cs| gpio.pc13.into_push_pull_output(cs));
+    let gpio = pac_peripherals.GPIOA.split(&mut rcc);
+    let pa8 = cortex_m::interrupt::free(move |cs| gpio.pa8.into_alternate_af2(cs));
 
-    rprintln!("LED initialized. Will blink now.");
+    let mut p = pwm::tim1(pac_peripherals.TIM1, pa8, &mut rcc, 50.hz());
+
+    let duty_a = p.get_max_duty() / 20;
+    let duty_b = p.get_max_duty() / 10;
+
+    p.set_duty(duty_a);
+    p.enable();
+
+    rprintln!("PWM initialzed, ready to run");
 
     loop {
-        // your code goes here
-        delay.delay_ms(300_u16);
-        led.toggle().ok();
+        delay.delay_ms(1000_u16);
+        p.set_duty(duty_b);
+        delay.delay_ms(1000_u16);
+        p.set_duty(duty_a);
     }
 }
