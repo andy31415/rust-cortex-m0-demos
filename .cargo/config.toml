@@ -39,3 +39,16 @@ target = "thumbv6m-none-eabi"        # Cortex-M0 and Cortex-M0+
 # target = "thumbv8m.base-none-eabi"   # Cortex-M23
 # target = "thumbv8m.main-none-eabi"   # Cortex-M33 (no FPU)
 # target = "thumbv8m.main-none-eabihf" # Cortex-M33 (with FPU)
+
+
+[profile.dev]
+opt-level = 's'
+lto = true
+debug = true
+incremental = true
+
+[profile.release]
+opt-level = 's'
+lto = true
+debug = true
+incremental = true
