@@ -1,5 +1,4 @@
 #![feature(alloc_error_handler)]
-#![feature(generic_const_exprs)]
 #![no_std]
 #![no_main]
 
@@ -25,17 +24,11 @@ use spi_constants::ws2812_constants;
 
 ws2812_constants!(WRITE_3_BYTE_CONSTANTS);
 
-pub struct SpiWrapper<SPI>
-where
-    SPI: embedded_hal::blocking::spi::Write<u8> + embedded_hal::blocking::spi::Transfer<u8>,
-{
+pub struct SpiWrapper<SPI: embedded_hal::blocking::spi::Write<u8>> {
     spi: SPI,
 }
 
-impl<SPI> SpiWrapper<SPI>
-where
-    SPI: embedded_hal::blocking::spi::Write<u8> + embedded_hal::blocking::spi::Transfer<u8>,
-{
+impl<SPI: embedded_hal::blocking::spi::Write<u8>> SpiWrapper<SPI> {
     fn new(spi: SPI) -> Self {
         SpiWrapper { spi }
     }
@@ -49,10 +42,7 @@ where
     }
 }
 
-impl<SPI> SmartLedsWrite for SpiWrapper<SPI>
-where
-    SPI: embedded_hal::blocking::spi::Write<u8> + embedded_hal::blocking::spi::Transfer<u8>,
-{
+impl<SPI: embedded_hal::blocking::spi::Write<u8>> SmartLedsWrite for SpiWrapper<SPI> {
     type Error = anyhow::Error;
     type Color = RGB8;
 
