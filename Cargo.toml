@@ -19,6 +19,9 @@ smart-leds = "0.3.0"
 anyhow = { version = "*", default-features = false }
 alloc-cortex-m = "*"
 
+# helper libraries
+spi-constants = { path = "spi_constants" }
+
 # this lets you use `cargo fix`!
 [[bin]]
 name = "m0test"
