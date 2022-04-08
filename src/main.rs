@@ -54,15 +54,12 @@ fn main() -> ! {
     rtt_init_print!();
 
     let mut pac_peripherals = pac::Peripherals::take().unwrap();
-    let cortex_peripherals = Peripherals::take().unwrap();
 
     let mut rcc = pac_peripherals
         .RCC
         .configure()
         .sysclk(48.mhz())
         .freeze(&mut pac_peripherals.FLASH);
-
-    let mut delay = Delay::new(cortex_peripherals.SYST, &rcc);
 
     let gpio = pac_peripherals.GPIOA.split(&mut rcc);
     let (a0, a1) =
