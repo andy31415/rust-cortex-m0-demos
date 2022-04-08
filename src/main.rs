@@ -2,6 +2,7 @@
 #![no_main]
 
 use cortex_m::Peripherals;
+use embedded_hal::adc::Channel;
 use hal::adc::Adc;
 use panic_rtt_target as _;
 
@@ -11,6 +12,42 @@ use stm32f0xx_hal as hal;
 use crate::hal::{delay::Delay, pac, prelude::*};
 
 use rtt_target::{rprintln, rtt_init_print};
+
+struct AdcReading<'a, CHANNEL> {
+    pin: CHANNEL,
+    name: &'a str,
+    known_value: Option<u16>, // known value for ADc
+    sensitivity_mv: u16,      // after how big of a delta to report a new value
+}
+
+impl<'a, CHANNEL> AdcReading<'a, CHANNEL>
+where
+    CHANNEL: Channel<Adc, ID = u8>,
+{
+    fn new(pin: CHANNEL, name: &'a str, sensitivity_mv: u16) -> Self {
+        Self {
+            pin,
+            name,
+            known_value: None,
+            sensitivity_mv: sensitivity_mv,
+        }
+    }
+
+    fn update(&mut self, adc: &mut Adc) {
+        let current = adc.read_abs_mv(&mut self.pin);
+
+        let should_update = match self.known_value {
+            None => true,
+            Some(known) if known > current => known - current >= self.sensitivity_mv,
+            Some(known) => current - known >= self.sensitivity_mv,
+        };
+
+        if should_update {
+            self.known_value = Some(current);
+            rprintln!("{} = {}", self.name, current);
+        }
+    }
+}
 
 #[entry]
 fn main() -> ! {
@@ -28,7 +65,7 @@ fn main() -> ! {
     let mut delay = Delay::new(cortex_peripherals.SYST, &rcc);
 
     let gpio = pac_peripherals.GPIOA.split(&mut rcc);
-    let (mut a0, mut a1) =
+    let (a0, a1) =
         cortex_m::interrupt::free(move |cs| (gpio.pa0.into_analog(cs), gpio.pa1.into_analog(cs)));
 
     rprintln!("Initialized. Ready to display values.");
@@ -36,14 +73,11 @@ fn main() -> ! {
     let mut adc = Adc::new(pac_peripherals.ADC, &mut rcc);
     adc.set_precision(hal::adc::AdcPrecision::B_12);
 
-    loop {
-        // your code goes here
-        delay.delay_ms(1000_u16);
+    let mut r0 = AdcReading::new(a0, "A0", 50);
+    let mut r1 = AdcReading::new(a1, "A1", 50);
 
-        rprintln!(
-            "Analog readings: A0 = {}, A1 = {}",
-            adc.read_abs_mv(&mut a0),
-            adc.read_abs_mv(&mut a1)
-        );
+    loop {
+        r0.update(&mut adc);
+        r1.update(&mut adc);
     }
 }
