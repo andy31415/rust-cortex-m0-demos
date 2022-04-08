@@ -2,6 +2,7 @@
 #![no_main]
 
 use cortex_m::Peripherals;
+use hal::adc::Adc;
 use panic_rtt_target as _;
 
 use cortex_m_rt::entry;
@@ -26,14 +27,23 @@ fn main() -> ! {
 
     let mut delay = Delay::new(cortex_peripherals.SYST, &rcc);
 
-    let gpio = pac_peripherals.GPIOC.split(&mut rcc);
-    let mut led = cortex_m::interrupt::free(move |cs| gpio.pc13.into_push_pull_output(cs));
+    let gpio = pac_peripherals.GPIOA.split(&mut rcc);
+    let (mut a0, mut a1) =
+        cortex_m::interrupt::free(move |cs| (gpio.pa0.into_analog(cs), gpio.pa1.into_analog(cs)));
 
-    rprintln!("LED initialized. Will blink now.");
+    rprintln!("Initialized. Ready to display values.");
+
+    let mut adc = Adc::new(pac_peripherals.ADC, &mut rcc);
+    adc.set_precision(hal::adc::AdcPrecision::B_12);
 
     loop {
         // your code goes here
-        delay.delay_ms(300_u16);
-        led.toggle().ok();
+        delay.delay_ms(1000_u16);
+
+        rprintln!(
+            "Analog readings: A0 = {}, A1 = {}",
+            adc.read_abs_mv(&mut a0),
+            adc.read_abs_mv(&mut a1)
+        );
     }
 }
