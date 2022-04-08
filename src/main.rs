@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 
-use cortex_m::Peripherals;
 use embedded_hal::adc::Channel;
 use hal::adc::Adc;
 use panic_rtt_target as _;
@@ -9,7 +8,7 @@ use panic_rtt_target as _;
 use cortex_m_rt::entry;
 use stm32f0xx_hal as hal;
 
-use crate::hal::{delay::Delay, pac, prelude::*};
+use crate::hal::{pac, prelude::*};
 
 use rtt_target::{rprintln, rtt_init_print};
 
