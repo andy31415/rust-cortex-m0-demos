@@ -10,13 +10,12 @@ name = "m0test"
 test = false
 
 [dependencies]
-alloc-cortex-m = "*"
 cortex-m = "0.7"
 cortex-m-rt = "0.7"
 cortex-m-semihosting = "0.3.3"
 embedded-hal = "0.2.7"
-rustfmt = "*"
 smart-leds = "0.3.0"
+ws2812-blocking-spi = "0.1.0"
 
 [dependencies.panic-rtt-target]
 features = ["cortex-m"]
@@ -34,15 +33,9 @@ version = "*"
 features = ["cortex-m"]
 version = "0.3.1"
 
-[dependencies.spi-constants]
-path = "spi_constants"
-
 [dependencies.stm32f0xx-hal]
 features = ["stm32f030x8"]
 version = "0.18"
-
-[dependencies.ws2812-blocking-spi]
-git = "https://github.com/andy31415/ws2812-blocking-spi-rs.git"
 
 [profile]
 [profile.release]
