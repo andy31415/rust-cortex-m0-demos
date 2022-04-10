@@ -188,9 +188,9 @@ struct TestSnakeMover {
 }
 
 impl TestSnakeMover {
-    fn new(random_seed: u64) -> Self {
+    fn new(direction: Direction, random_seed: u64) -> Self {
         Self {
-            direction: Direction::Right,
+            direction,
             rnd: rand_chacha::ChaChaRng::seed_from_u64(random_seed),
         }
     }
@@ -265,19 +265,26 @@ impl SnakeController for TestSnakeMover {
 struct Game {
     snake_a: Snake,
     snake_a_controller: TestSnakeMover,
+
+    snake_b: Snake,
+    snake_b_controller: TestSnakeMover,
 }
 
 #[derive(PartialEq)]
 enum Collision {
     None,
-    SnakeA(Point),
+    Collision(Point),
 }
 
 impl Game {
     fn new(random_seed: u64) -> Self {
+        let mut rng = rand_chacha::ChaChaRng::seed_from_u64(random_seed);
         Self {
             snake_a: Snake::new(Point { x: 8, y: 8 }, [0xFF_u8, 0xFF_u8, 0_u8].into()),
-            snake_a_controller: TestSnakeMover::new(random_seed),
+            snake_a_controller: TestSnakeMover::new(Direction::Right, rng.gen()),
+
+            snake_b: Snake::new(Point { x: 25, y: 8 }, [0_u8, 0xFF_u8, 0xFF_u8].into()),
+            snake_b_controller: TestSnakeMover::new(Direction::Left, rng.gen()),
         }
     }
 
@@ -289,20 +296,55 @@ impl Game {
                 rprintln!("Error for index {:?}", point);
             }
         }
+
+        for point in self.snake_b.iter() {
+            if let Some(idx) = panel.get_coordinate(point) {
+                data[idx] = self.snake_b.color;
+            } else {
+                rprintln!("Error for index {:?}", point);
+            }
+        }
     }
 
     fn check_collision(&self) -> Collision {
         let head = self.snake_a.get_head();
+
         for tail_point in self.snake_a.iter().skip(1) {
             if head == *tail_point {
-                return Collision::SnakeA(head)
+                return Collision::Collision(head)
             }
         }
+        for tail_point in self.snake_b.iter() {
+            if head == *tail_point {
+                return Collision::Collision(head)
+            }
+        }
+
+        let head = self.snake_b.get_head();
+        
+        for tail_point in self.snake_a.iter() {
+            if head == *tail_point {
+                return Collision::Collision(head)
+            }
+        }
+        for tail_point in self.snake_b.iter().skip(1) {
+            if head == *tail_point {
+                return Collision::Collision(head)
+            }
+        }
+
         Collision::None
     }
 
     fn step(&mut self) {
         self.snake_a.move_step(&mut self.snake_a_controller);
+        self.snake_b.move_step(&mut self.snake_b_controller);
+    }
+
+
+    fn reset(&mut self) {
+       self.snake_a = Snake::new(Point { x: 8, y: 8 }, [0xFF_u8, 0xFF_u8, 0_u8].into());
+       self.snake_b = Snake::new(Point { x: 25, y: 8 }, [0_u8, 0xFF_u8, 0xFF_u8].into());
     }
 }
 
@@ -378,7 +420,7 @@ fn main() -> ! {
         game.display(&panel, &mut data);
 
         let collision = game.check_collision();
-        if let Collision::SnakeA(p) = collision {
+        if let Collision::Collision(p) = collision {
            if let Some(idx) = panel.get_coordinate(&p) {
               data[idx] = [0xFF_u8, 0_u8, 0_u8].into();
            }
@@ -389,8 +431,7 @@ fn main() -> ! {
 
         if collision != Collision::None {
             delay.delay_ms(2000_u32);
-            // FIXME: reset the game
-            //snake = Snake::new(head, snake.direction(), snake_color);
+            game.reset();
         }
     }
 }
