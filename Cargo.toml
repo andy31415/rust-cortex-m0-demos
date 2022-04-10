@@ -13,11 +13,11 @@ rtt-target = {version = "0.3.1", features=["cortex-m"]}
 panic-rtt-target = {version = "0.1.2", features=["cortex-m"]}
 stm32f0xx-hal = { version = "0.18", features = ["stm32f030x8"]}
 embedded-hal = "0.2.7"
-ws2812-spi = "0.4.0"
-ws2812-timer-delay = {version = "0.3.0", features = ["slow"]}
 smart-leds = "0.3.0"
-anyhow = { version = "*", default-features = false }
 alloc-cortex-m = "*"
+ws2812-blocking-spi = { git="https://github.com/andy31415/ws2812-blocking-spi-rs.git" }
+rand = {version = "*", default-features=false }
+rand_chacha = {version = "*", default-features=false }
 
 # helper libraries
 spi-constants = { path = "spi_constants" }

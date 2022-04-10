@@ -1,14 +1,17 @@
-#![feature(alloc_error_handler)]
 #![no_std]
 #![no_main]
+
+use core::slice::Iter;
+
+use rand::{Rng, SeedableRng};
 
 use embedded_hal::spi::{Mode, Phase, Polarity};
 use smart_leds::brightness;
 
 use crate::hal::delay::Delay;
 
-use cortex_m::{asm, Peripherals};
-use hal::spi::Spi;
+use cortex_m::Peripherals;
+use hal::{spi::Spi, adc::{Adc, VTemp}};
 use panic_rtt_target as _;
 
 use cortex_m_rt::entry;
@@ -19,75 +22,168 @@ use crate::hal::{pac, prelude::*};
 
 use rtt_target::{rprintln, rtt_init_print};
 use smart_leds::RGB8;
+use ws2812_blocking_spi::Ws2812BlockingWriter;
 
-use spi_constants::ws2812_constants;
-
-ws2812_constants!(WRITE_3_BYTE_CONSTANTS);
-
-pub struct SpiWrapper<SPI: embedded_hal::blocking::spi::Write<u8>> {
-    spi: SPI,
+#[derive(Debug, Clone, Copy, Default)]
+struct Point {
+    x: usize,
+    y: usize,
 }
 
-impl<SPI: embedded_hal::blocking::spi::Write<u8>> SpiWrapper<SPI> {
-    fn new(spi: SPI) -> Self {
-        SpiWrapper { spi }
-    }
-
-    fn flush(&mut self) -> anyhow::Result<()> {
-        // Should be > 300μs, so for an SPI Freq. of 3.8MHz, we have to send at least 1140 low bits or 140 low bytes
-        self.spi
-            .write(&[0u8; 140])
-            .map_err(|_e| anyhow::anyhow!("Write error"))?;
-        Ok(())
-    }
+#[derive(Debug, Clone, Copy)]
+struct PanelSize {
+    rows: usize,
+    columns: usize,
 }
 
-impl<SPI: embedded_hal::blocking::spi::Write<u8>> SmartLedsWrite for SpiWrapper<SPI> {
-    type Error = anyhow::Error;
-    type Color = RGB8;
+/// Given a "screen" XY coordinate, transform it into an index of a flat
+/// memory buffer.
+trait PointIndexMapping {
+    /// Converts a XY point into an index in a LED array
+    fn get_coordinate(self: &Self, point: &Point) -> Option<usize>;
+}
 
-    /// Write all the items of an iterator to a ws2812 strip
-    fn write<T, I>(&mut self, iterator: T) -> Result<(), anyhow::Error>
-    where
-        T: Iterator<Item = I>,
-        I: Into<Self::Color>,
-    {
-        let mut buffer = [0u8; 12];
-        for item in iterator {
-            let item = item.into();
+/// Represents several LED panels correncted to each other.
+///
+/// Connection is assumed right to left.
+struct LedPanels {
+    panel_size: PanelSize,
+    panels: usize,
+}
 
-            buffer[0..4].copy_from_slice(&WRITE_3_BYTE_CONSTANTS[item.g as usize]);
-            buffer[4..8].copy_from_slice(&WRITE_3_BYTE_CONSTANTS[item.r as usize]);
-            buffer[8..12].copy_from_slice(&WRITE_3_BYTE_CONSTANTS[item.b as usize]);
-
-            self.spi
-                .write(&buffer)
-                .map_err(|_e| anyhow::anyhow!("Write error"))?;
+impl LedPanels {
+    /// Construct a new structure representing several 16x16 LED panels
+    /// connected together.
+    fn new_16x16(panels: usize) -> Self {
+        Self {
+            panel_size: PanelSize {
+                rows: 16,
+                columns: 16,
+            },
+            panels,
         }
-        self.flush()?;
-
-        Ok(())
     }
 }
 
-// Example enabling of cortex-M heap, of size HEAP_SIZE
-extern crate alloc;
+impl PointIndexMapping for LedPanels {
+    fn get_coordinate(self: &Self, point: &Point) -> Option<usize> {
+        // layout of panels:
+        // left to write in descending oder, so x determines the
+        // actual panel
+        let panel = self.panels - point.x / self.panel_size.columns - 1;
 
-use alloc_cortex_m::CortexMHeap;
-use core::alloc::Layout;
-use core::mem::MaybeUninit;
+        if panel >= self.panels {
+            return None;
+        }
 
-const HEAP_SIZE: usize = 1024;
+        let x = point.x % self.panel_size.columns;
 
-#[global_allocator]
-static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
-static mut HEAP: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
+        // Order is: left to right for even rows, left to right for odd rows
+        Some(
+            if point.y % 2 == 1 {
+                self.panel_size.columns - x - 1
+            } else {
+                x
+            } 
+            // move to the right panel
+            + panel * self.panel_size.rows * self.panel_size.columns
+            // place on the correct column
+            + self.panel_size.columns * point.y,
+        )
+    }
+}
+
+const SNAKE_MAX_SIZE: usize = 128;
+
+enum Direction {
+    Up, Down, Left, Right,
+}
+
+enum SnakeMoveStyle {
+    Move, Grow,
+}
+
+struct SnakeMove {
+    point: Point,
+    style: SnakeMoveStyle,
+}
+
+struct Snake {
+    pub color: RGB8,
+    current_size: usize,
+    data: [Point; SNAKE_MAX_SIZE],
+}
+
+impl Snake {
+    fn new(position: Point, color: RGB8) -> Self {
+        let mut data = [Point::default(); SNAKE_MAX_SIZE];
+        data[0] = position;
+
+        Snake {
+            color,
+            data,
+            current_size: 1,
+        }
+    }
+
+    fn iter(&self) -> Iter<Point> {
+        self.data[0..self.current_size].iter()
+    }
+
+    fn get_head(&self) -> Point {
+        self.data[0]
+    }
+
+    /// Replaces the current head position
+    /// 
+    /// Tail will get erased and then the given head_position will become 
+    /// the new head
+    fn move_to(&mut self, m: &SnakeMove) {
+        // first determine what to do with self.data
+        match m.style  {
+            SnakeMoveStyle::Move => {
+                // Moving involves replacing all data
+                self.data.copy_within(0..self.current_size-1, 1);
+            },
+            SnakeMoveStyle::Grow => {
+                if self.current_size < SNAKE_MAX_SIZE {
+                    self.data.copy_within(0..self.current_size, 1);
+                    self.current_size += 1;
+                }
+            }
+        }
+
+        // new head can be updated
+        self.data[0] = m.point;
+    }
+
+    fn size(&self) -> usize {
+        self.current_size
+    }
+}
+
+fn get_new_position(snake: &Snake, direction: &Direction) -> Point {
+    let head = snake.get_head();
+
+    // compute new head
+    let head = match direction {
+        Direction::Up => Point{x: head.x, y: head.y + 1},
+        Direction::Down => Point{x: head.x, y: head.y.wrapping_sub(1) },
+        Direction::Left => Point{x: head.x.wrapping_sub(1), y: head.y},
+        Direction::Right => Point{x: head.x+1, y: head.y},
+    };
+
+    // resolve wrapping
+
+    Point {
+        x: head.x % 32,
+        y: head.y % 16
+    }
+}
 
 #[entry]
 fn main() -> ! {
     rtt_init_print!();
-
-    unsafe { ALLOCATOR.init((&HEAP).as_ptr() as usize, HEAP_SIZE) }
 
     let mut pac_peripherals = pac::Peripherals::take().unwrap();
     let cortex_peripherals = Peripherals::take().unwrap();
@@ -100,6 +196,8 @@ fn main() -> ! {
 
     rprintln!("SClock: {} Hz", rcc.clocks.sysclk().0);
     rprintln!("PClock: {} Hz", rcc.clocks.pclk().0);
+
+    //rprintln!("PClock: {} Hz", pac_peripherals.)
 
     let mut delay = Delay::new(cortex_peripherals.SYST, &rcc);
 
@@ -120,97 +218,81 @@ fn main() -> ! {
             polarity: Polarity::IdleLow,
             phase: Phase::CaptureOnFirstTransition,
         },
-        2400.khz(),
+        4000.khz(),
         &mut rcc,
     );
 
     let spi = spi.into_8bit_width();
 
-    const NUM_LEDS: usize = 10;
-    let mut spi = SpiWrapper::new(spi);
-    let mut data = [RGB8::default(); NUM_LEDS];
+    const NUM_LEDS: usize = 16 * 16 * 2;
+    let mut spi = Ws2812BlockingWriter::new(spi);
+
+    let panel = LedPanels::new_16x16(2);
+
+    // red snake
+    let mut snake = Snake::new(Point { x: 8, y: 8 }, [0xFF_u8, 0xFF_u8, 0_u8].into());
+
+    let mut snake_direction = Direction::Right;
+
+    // TODO: find a random seed
+    let mut adc = Adc::new(pac_peripherals.ADC, &mut rcc);
+
+    let mut r = 0;
+    for _i in 0..64 {
+        r = r << 1;
+        if VTemp::read(&mut adc, None) & 0x01 == 1 {
+            r |= 1;
+        }
+    }
+
+    rprintln!("Random seed: 0x{:08X}", r);
+    let mut rnd = rand_chacha::ChaChaRng::seed_from_u64(r);
 
     rprintln!("Ready to run.");
     loop {
-        rprintln!("Looping...");
-        for j in 0..(256 * 5) {
-            for (i, data) in data.iter_mut().enumerate() {
-                *data = wheel((((i * 256) as u16 / NUM_LEDS as u16 + j as u16) & 255) as u8);
+        let point = get_new_position(&snake, &snake_direction);
+        snake.move_to(&SnakeMove{
+            point,
+            style: if snake.size() < 5 {SnakeMoveStyle::Grow } else {SnakeMoveStyle::Move }
+        });
+
+
+        // Implementing a tur
+        match rnd.gen_range(0..10) {
+            0 => {
+                // Turn left
+                snake_direction = match snake_direction {
+                    Direction::Up => Direction::Left,
+                    Direction::Left => Direction::Down,
+                    Direction::Down => Direction::Right,
+                    Direction::Right => Direction::Up,
+                };
             }
-
-            spi.write(brightness(data.iter().cloned(), 32)).unwrap();
-            delay.delay_ms(5u8);
+            1 => {
+                // Turn right
+                snake_direction = match snake_direction {
+                    Direction::Up => Direction::Right,
+                    Direction::Left => Direction::Up,
+                    Direction::Down => Direction::Left,
+                    Direction::Right => Direction::Down,
+                };
+            }
+            _ => { /* keep direction */}
         }
-    }
-}
 
-/// A range of values within [0, 255].
-#[derive(Copy, Clone, Debug)]
-pub struct Range8 {
-    low: u8,
-    high: u8,
-}
 
-impl Range8 {
-    pub fn new(low: u8, high: u8) -> Self {
-        Range8 { low, high }
-    }
 
-    /// Get the "location" of a value within the rante, with 0 representing
-    /// the start and 255 representing the end.
-    ///
-    /// Examples:
-    ///
-    /// ```
-    ///   let r = Range{low: 100, high: 200};
-    ///   r.location(100); // Some(0)   == start
-    ///   r.location(150); // Some(128) == middle
-    ///   r.location(200); // Some(255) == end
-    ///   r.location(0);   // None      == not in range
-    ///   r.location(201); // None      == not in range
-    /// ```
-    pub fn location(&self, value: u8) -> Option<u8> {
-        if (value >= self.low) && (value <= self.high) {
-            let x = (value - self.low) as u16 * 255u16;
-            let range = (self.high - self.low) as u16;
-            Some((x / range) as u8)
-        } else {
-            None
+        // display snake
+        let mut data = [RGB8::default(); NUM_LEDS];
+        for point in snake.iter() {
+            if let Some(idx) = panel.get_coordinate(point) {
+                data[idx] = snake.color;
+            } else {
+                rprintln!("Error for index {:?}", point);
+            }
         }
-    }
-}
+        spi.write(brightness(data.iter().cloned(), 10)).unwrap();
 
-/// TRIANGLE step function that combines two linear interpolators
-/// value goes up for a range and down for another
-///
-/// To have smooth transitions, end of up should mach start of down, however
-/// this is not enforced/validated as this is used with u8 and wrapping.
-fn triangle(up: Range8, down: Range8, value: u8) -> u8 {
-    up.location(value)
-        .or_else(|| down.location(value).map(|x| 255 - x))
-        .unwrap_or(0)
-}
-
-/// Input a value 0 to 255 to get a color value
-/// The colours are a transition r - g - b - back to r.
-fn wheel(w: u8) -> RGB8 {
-    let r0 = Range8::new(0, 85);
-    let r1 = Range8::new(85, 170);
-    let r2 = Range8::new(170, 255);
-
-    let rgb = (
-        triangle(r0, r1, w),
-        triangle(r1, r2, w),
-        triangle(r2, r0, w),
-    );
-
-    rgb.into()
-}
-
-#[alloc_error_handler]
-fn alloc_error(_layout: Layout) -> ! {
-    rprintln!("OOM");
-    loop {
-        asm::nop();
+        delay.delay_ms(70_u32);
     }
 }
