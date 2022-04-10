@@ -24,7 +24,7 @@ use rtt_target::{rprintln, rtt_init_print};
 use smart_leds::RGB8;
 use ws2812_blocking_spi::Ws2812BlockingWriter;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 struct Point {
     x: usize,
     y: usize,
@@ -143,13 +143,14 @@ impl Snake {
         match m.style  {
             SnakeMoveStyle::Move => {
                 // Moving involves replacing all data
-                self.data.copy_within(0..self.current_size-1, 1);
-            },
+                self.data.copy_within(0..self.current_size - 1, 1);
+            }
+            SnakeMoveStyle::Grow if self.current_size >= SNAKE_MAX_SIZE => {
+                self.data.copy_within(0..self.current_size - 1, 1);
+            }
             SnakeMoveStyle::Grow => {
-                if self.current_size < SNAKE_MAX_SIZE {
-                    self.data.copy_within(0..self.current_size, 1);
-                    self.current_size += 1;
-                }
+                self.data.copy_within(0..self.current_size, 1);
+                self.current_size += 1;
             }
         }
 
@@ -180,6 +181,17 @@ fn get_new_position(snake: &Snake, direction: &Direction) -> Point {
         y: head.y % 16
     }
 }
+
+fn poor_random(adc: &mut Adc) -> u64 {
+    let mut r = 0_u64;
+    for _i in 0..64 {
+        r = r << 1;
+        if VTemp::read(adc, None) & 0x01 == 1 {
+            r |= 1;
+        }
+    }
+    r
+} 
 
 #[entry]
 fn main() -> ! {
@@ -230,35 +242,30 @@ fn main() -> ! {
     let panel = LedPanels::new_16x16(2);
 
     // red snake
-    let mut snake = Snake::new(Point { x: 8, y: 8 }, [0xFF_u8, 0xFF_u8, 0_u8].into());
+    let snake_color: RGB8 =[0xFF_u8, 0xFF_u8, 0_u8].into();
+    let mut snake = Snake::new(Point { x: 8, y: 8 }, snake_color);
 
     let mut snake_direction = Direction::Right;
 
     // TODO: find a random seed
     let mut adc = Adc::new(pac_peripherals.ADC, &mut rcc);
+    let random_seed = poor_random(&mut adc);
 
-    let mut r = 0;
-    for _i in 0..64 {
-        r = r << 1;
-        if VTemp::read(&mut adc, None) & 0x01 == 1 {
-            r |= 1;
-        }
-    }
+    rprintln!("Random seed: 0x{:016X}", random_seed);
+    let mut rnd = rand_chacha::ChaChaRng::seed_from_u64(random_seed);
 
-    rprintln!("Random seed: 0x{:08X}", r);
-    let mut rnd = rand_chacha::ChaChaRng::seed_from_u64(r);
 
     rprintln!("Ready to run.");
     loop {
         let point = get_new_position(&snake, &snake_direction);
         snake.move_to(&SnakeMove{
             point,
-            style: if snake.size() < 5 {SnakeMoveStyle::Grow } else {SnakeMoveStyle::Move }
+            style: if snake.size() < 15 {SnakeMoveStyle::Grow } else {SnakeMoveStyle::Move }
         });
 
 
         // Implementing a tur
-        match rnd.gen_range(0..10) {
+        match rnd.gen_range(0_i32..10_i32) {
             0 => {
                 // Turn left
                 snake_direction = match snake_direction {
@@ -280,8 +287,6 @@ fn main() -> ! {
             _ => { /* keep direction */}
         }
 
-
-
         // display snake
         let mut data = [RGB8::default(); NUM_LEDS];
         for point in snake.iter() {
@@ -291,8 +296,25 @@ fn main() -> ! {
                 rprintln!("Error for index {:?}", point);
             }
         }
-        spi.write(brightness(data.iter().cloned(), 10)).unwrap();
+        let mut collision = false;
 
+        // check if the head hit the snake
+        let head = snake.get_head();
+        for tail_point in snake.iter().skip(1) {
+            if head == *tail_point {
+                collision = true;
+                if let Some(idx) = panel.get_coordinate(&head) {
+                    data[idx] = [0xFF_u8, 0_u8, 0_u8].into();
+                }
+            }
+        }
+        //for point in snake.iter().
+        spi.write(brightness(data.iter().cloned(), 10)).unwrap();
         delay.delay_ms(70_u32);
+
+        if collision {
+            delay.delay_ms(2000_u32);
+            snake = Snake::new(head, snake_color);
+        }
     }
 }
