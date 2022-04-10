@@ -121,12 +121,19 @@ struct SnakeMove {
     style: SnakeMoveStyle,
 }
 
+/// Something the snake can eat
+enum Powerup {
+    Apple, // makes the snake grow
+}
+
 trait SnakeController {
     fn next_move(&mut self, snake: &Snake) -> SnakeMove;
 
     fn step(&mut self, adc: &mut Adc);
 
     fn reset(&mut self);
+
+    fn eat(&mut self, powerup: Powerup);
 }
 
 struct Snake {
@@ -192,6 +199,7 @@ struct TestSnakeMover {
     start_direction: Direction,
     direction: Direction,
     rnd: ChaCha20Rng,
+    target_size: usize,
 }
 
 impl TestSnakeMover {
@@ -200,13 +208,21 @@ impl TestSnakeMover {
             direction,
             start_direction: direction,
             rnd: rand_chacha::ChaChaRng::seed_from_u64(random_seed),
+            target_size: 5,
         }
     }
 }
 
 impl SnakeController for TestSnakeMover {
+    fn eat(&mut self, powerup: Powerup) {
+        match powerup {
+            Powerup::Apple => self.target_size += 4,
+        }
+    }
+
     fn reset(&mut self) {
         self.direction = self.start_direction;
+        self.target_size = 5;
     }
 
     fn step(&mut self, _adc: &mut Adc) {
@@ -265,7 +281,7 @@ impl SnakeController for TestSnakeMover {
 
         SnakeMove {
             point,
-            style: if snake.size() < 15 {
+            style: if snake.size() < self.target_size {
                 SnakeMoveStyle::Grow
             } else {
                 SnakeMoveStyle::Move
@@ -279,6 +295,7 @@ struct JoystickMover<UdPin, LrPin> {
     direction: Direction,
     ud_pin: UdPin,
     lr_pin: LrPin,
+    target_size: usize,
 }
 
 impl<UdPin, LrPin> JoystickMover<UdPin, LrPin> {
@@ -288,6 +305,7 @@ impl<UdPin, LrPin> JoystickMover<UdPin, LrPin> {
             direction,
             ud_pin,
             lr_pin,
+            target_size: 5,
         }
     }
 }
@@ -299,6 +317,7 @@ where
 {
     fn reset(&mut self) {
         self.direction = self.start_direction;
+        self.target_size = 5;
     }
 
     fn step(&mut self, adc: &mut Adc) {
@@ -374,21 +393,36 @@ where
         };
         SnakeMove {
             point,
-            style: if snake.size() < 15 {
+            style: if snake.size() < self.target_size {
                 SnakeMoveStyle::Grow
             } else {
                 SnakeMoveStyle::Move
             },
         }
     }
+
+    fn eat(&mut self, powerup: Powerup) {
+        match powerup {
+            Powerup::Apple => self.target_size += 4,
+        }
+    }
 }
 
-struct Game<ControllerA, ControllerB> {
+const APPLE_COLOR: RGB8 = RGB8 {
+    r: 0xFF_u8,
+    g: 0_u8,
+    b: 0x20_u8,
+};
+
+struct Game<ControllerA, ControllerB, GameRng> {
+    rng: GameRng,
     snake_a: Snake,
     snake_a_controller: ControllerA,
 
     snake_b: Snake,
     snake_b_controller: ControllerB,
+
+    apple: Point,
 }
 
 #[derive(PartialEq)]
@@ -397,19 +431,50 @@ enum Collision {
     Collision(Point),
 }
 
-impl<ControllerA, ControllerB> Game<ControllerA, ControllerB>
+impl<ControllerA, ControllerB, GameRng> Game<ControllerA, ControllerB, GameRng>
 where
     ControllerA: SnakeController,
     ControllerB: SnakeController,
+    GameRng: Rng,
 {
-    fn new(snake_a_controller: ControllerA, snake_b_controller: ControllerB) -> Self {
-        Self {
+    fn new(snake_a_controller: ControllerA, snake_b_controller: ControllerB, rng: GameRng) -> Self {
+        let mut result = Self {
+            rng,
+
             snake_a: Snake::new(Point { x: 8, y: 8 }, [0xFF_u8, 0xFF_u8, 0_u8].into()),
             snake_a_controller: snake_a_controller,
 
             snake_b: Snake::new(Point { x: 25, y: 8 }, [0_u8, 0xFF_u8, 0xFF_u8].into()),
             snake_b_controller: snake_b_controller,
+
+            apple: Point { x: 0, y: 0 },
+        };
+
+        result.new_apple(); // position 0/0 is not ideal
+
+        result
+    }
+
+    fn new_apple(&mut self) {
+        loop {
+            let pick = Point {
+                x: self.rng.gen_range(0..32),
+                y: self.rng.gen_range(0..16),
+            };
+
+            if !self.collides(pick) {
+                self.apple = pick;
+                break;
+            }
         }
+    }
+
+    fn collides(&self, point: Point) -> bool {
+        self.snake_a
+            .iter()
+            .chain(self.snake_b.iter())
+            .find(|&&x| x == point)
+            .is_some()
     }
 
     fn display<MAPPER: PointIndexMapping>(&self, panel: &MAPPER, data: &mut [RGB8; NUM_LEDS]) {
@@ -427,6 +492,12 @@ where
             } else {
                 rprintln!("Error for index {:?}", point);
             }
+        }
+
+        if let Some(idx) = panel.get_coordinate(&self.apple) {
+            data[idx] = APPLE_COLOR;
+        } else {
+            rprintln!("Error for index {:?}", self.apple);
         }
     }
 
@@ -466,6 +537,15 @@ where
 
         self.snake_a.move_step(&mut self.snake_a_controller);
         self.snake_b.move_step(&mut self.snake_b_controller);
+
+        // check if an apple was eaten
+        if self.snake_a.get_head() == self.apple {
+            self.snake_a_controller.eat(Powerup::Apple);
+            self.new_apple()
+        } else if self.snake_b.get_head() == self.apple {
+            self.snake_b_controller.eat(Powerup::Apple);
+            self.new_apple()
+        }
     }
 
     fn reset(&mut self) {
@@ -536,13 +616,14 @@ fn main() -> ! {
     let panel = LedPanels::new_16x16(2);
     let mut adc = Adc::new(pac_peripherals.ADC, &mut rcc);
 
-    //let mut rng = rand_chacha::ChaChaRng::seed_from_u64(poor_random(&mut adc));
-
     let controller_a = JoystickMover::new(Direction::Right, a0, a1);
     let controller_b = JoystickMover::new(Direction::Left, a2, a3);
-    //let controller_b = TestSnakeMover::new(Direction::Left, rng.gen());
 
-    let mut game = Game::new(controller_a, controller_b);
+    let mut game = Game::new(
+        controller_a,
+        controller_b,
+        rand_chacha::ChaChaRng::seed_from_u64(poor_random(&mut adc)),
+    );
 
     rprintln!("Ready to run.");
     loop {
