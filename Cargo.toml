@@ -1,34 +1,51 @@
 [package]
 authors = ["Andrei"]
 edition = "2018"
-readme = "README.md"
 name = "m0test"
+readme = "README.md"
 version = "0.1.0"
+[[bin]]
+bench = false
+name = "m0test"
+test = false
 
 [dependencies]
+alloc-cortex-m = "*"
 cortex-m = "0.7"
 cortex-m-rt = "0.7"
 cortex-m-semihosting = "0.3.3"
-rtt-target = {version = "0.3.1", features=["cortex-m"]}
-panic-rtt-target = {version = "0.1.2", features=["cortex-m"]}
-stm32f0xx-hal = { version = "0.18", features = ["stm32f030x8"]}
 embedded-hal = "0.2.7"
+rustfmt = "*"
 smart-leds = "0.3.0"
-alloc-cortex-m = "*"
-ws2812-blocking-spi = { git="https://github.com/andy31415/ws2812-blocking-spi-rs.git" }
-rand = {version = "*", default-features=false }
-rand_chacha = {version = "*", default-features=false }
 
-# helper libraries
-spi-constants = { path = "spi_constants" }
+[dependencies.panic-rtt-target]
+features = ["cortex-m"]
+version = "0.1.2"
 
-# this lets you use `cargo fix`!
-[[bin]]
-name = "m0test"
-test = false
-bench = false
+[dependencies.rand]
+default-features = false
+version = "*"
 
+[dependencies.rand_chacha]
+default-features = false
+version = "*"
+
+[dependencies.rtt-target]
+features = ["cortex-m"]
+version = "0.3.1"
+
+[dependencies.spi-constants]
+path = "spi_constants"
+
+[dependencies.stm32f0xx-hal]
+features = ["stm32f030x8"]
+version = "0.18"
+
+[dependencies.ws2812-blocking-spi]
+git = "https://github.com/andy31415/ws2812-blocking-spi-rs.git"
+
+[profile]
 [profile.release]
-codegen-units = 1 # better optimizations
-debug = true # symbols are nice and they don't increase the size on Flash
+codegen-units = 1
+debug = true
 lto = true # better optimizations

@@ -11,7 +11,10 @@ use smart_leds::brightness;
 use crate::hal::delay::Delay;
 
 use cortex_m::Peripherals;
-use hal::{spi::Spi, adc::{Adc, VTemp}};
+use hal::{
+    adc::{Adc, VTemp},
+    spi::Spi,
+};
 use panic_rtt_target as _;
 
 use cortex_m_rt::entry;
@@ -95,12 +98,22 @@ impl PointIndexMapping for LedPanels {
 
 const SNAKE_MAX_SIZE: usize = 128;
 
+#[derive(Debug, Clone, Copy)]
+enum SnakeError {
+    CannotReverse, // cannot reverse the direction
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Direction {
-    Up, Down, Left, Right,
+    Up,
+    Down,
+    Left,
+    Right,
 }
 
 enum SnakeMoveStyle {
-    Move, Grow,
+    Move,
+    Grow,
 }
 
 struct SnakeMove {
@@ -112,16 +125,18 @@ struct Snake {
     pub color: RGB8,
     current_size: usize,
     data: [Point; SNAKE_MAX_SIZE],
+    movement_direction: Direction,
 }
 
 impl Snake {
-    fn new(position: Point, color: RGB8) -> Self {
+    fn new(position: Point, movement_direction: Direction, color: RGB8) -> Self {
         let mut data = [Point::default(); SNAKE_MAX_SIZE];
         data[0] = position;
 
         Snake {
             color,
             data,
+            movement_direction,
             current_size: 1,
         }
     }
@@ -134,13 +149,30 @@ impl Snake {
         self.data[0]
     }
 
+    fn direction(&self) -> Direction {
+        self.movement_direction
+    }
+
+    fn turn_towards(&mut self, direction: Direction) -> Result<(), SnakeError> {
+        if ((self.movement_direction == Direction::Right) && (direction == Direction::Left))
+            || ((self.movement_direction == Direction::Left) && (direction == Direction::Right))
+            || ((self.movement_direction == Direction::Up) && (direction == Direction::Down))
+            || ((self.movement_direction == Direction::Down) && (direction == Direction::Up))
+        {
+            return Err(SnakeError::CannotReverse);
+        }
+
+        self.movement_direction = direction;
+        Ok(())
+    }
+
     /// Replaces the current head position
-    /// 
-    /// Tail will get erased and then the given head_position will become 
+    ///
+    /// Tail will get erased and then the given head_position will become
     /// the new head
     fn move_to(&mut self, m: &SnakeMove) {
         // first determine what to do with self.data
-        match m.style  {
+        match m.style {
             SnakeMoveStyle::Move => {
                 // Moving involves replacing all data
                 self.data.copy_within(0..self.current_size - 1, 1);
@@ -168,17 +200,29 @@ fn get_new_position(snake: &Snake, direction: &Direction) -> Point {
 
     // compute new head
     let head = match direction {
-        Direction::Up => Point{x: head.x, y: head.y + 1},
-        Direction::Down => Point{x: head.x, y: head.y.wrapping_sub(1) },
-        Direction::Left => Point{x: head.x.wrapping_sub(1), y: head.y},
-        Direction::Right => Point{x: head.x+1, y: head.y},
+        Direction::Up => Point {
+            x: head.x,
+            y: head.y + 1,
+        },
+        Direction::Down => Point {
+            x: head.x,
+            y: head.y.wrapping_sub(1),
+        },
+        Direction::Left => Point {
+            x: head.x.wrapping_sub(1),
+            y: head.y,
+        },
+        Direction::Right => Point {
+            x: head.x + 1,
+            y: head.y,
+        },
     };
 
     // resolve wrapping
 
     Point {
         x: head.x % 32,
-        y: head.y % 16
+        y: head.y % 16,
     }
 }
 
@@ -191,7 +235,7 @@ fn poor_random(adc: &mut Adc) -> u64 {
         }
     }
     r
-} 
+}
 
 #[entry]
 fn main() -> ! {
@@ -242,10 +286,8 @@ fn main() -> ! {
     let panel = LedPanels::new_16x16(2);
 
     // red snake
-    let snake_color: RGB8 =[0xFF_u8, 0xFF_u8, 0_u8].into();
-    let mut snake = Snake::new(Point { x: 8, y: 8 }, snake_color);
-
-    let mut snake_direction = Direction::Right;
+    let snake_color: RGB8 = [0xFF_u8, 0xFF_u8, 0_u8].into();
+    let mut snake = Snake::new(Point { x: 8, y: 8 }, Direction::Right, snake_color);
 
     // TODO: find a random seed
     let mut adc = Adc::new(pac_peripherals.ADC, &mut rcc);
@@ -254,37 +296,43 @@ fn main() -> ! {
     rprintln!("Random seed: 0x{:016X}", random_seed);
     let mut rnd = rand_chacha::ChaChaRng::seed_from_u64(random_seed);
 
-
     rprintln!("Ready to run.");
     loop {
-        let point = get_new_position(&snake, &snake_direction);
-        snake.move_to(&SnakeMove{
+        let point = get_new_position(&snake, &snake.direction());
+        snake.move_to(&SnakeMove {
             point,
-            style: if snake.size() < 15 {SnakeMoveStyle::Grow } else {SnakeMoveStyle::Move }
+            style: if snake.size() < 15 {
+                SnakeMoveStyle::Grow
+            } else {
+                SnakeMoveStyle::Move
+            },
         });
 
-
         // Implementing a tur
-        match rnd.gen_range(0_i32..10_i32) {
+        let turn_status = snake.turn_towards(match rnd.gen_range(0_i32..10_i32) {
             0 => {
                 // Turn left
-                snake_direction = match snake_direction {
+                match snake.direction() {
                     Direction::Up => Direction::Left,
                     Direction::Left => Direction::Down,
                     Direction::Down => Direction::Right,
                     Direction::Right => Direction::Up,
-                };
+                }
             }
             1 => {
                 // Turn right
-                snake_direction = match snake_direction {
+                match snake.direction() {
                     Direction::Up => Direction::Right,
                     Direction::Left => Direction::Up,
                     Direction::Down => Direction::Left,
                     Direction::Right => Direction::Down,
-                };
+                }
             }
-            _ => { /* keep direction */}
+            _ => snake.direction(), // no turn
+        });
+
+        if let Err(e) = turn_status {
+            rprintln!("Error turning: {:?}", e);
         }
 
         // display snake
@@ -314,7 +362,7 @@ fn main() -> ! {
 
         if collision {
             delay.delay_ms(2000_u32);
-            snake = Snake::new(head, snake_color);
+            snake = Snake::new(head, snake.direction(), snake_color);
         }
     }
 }
