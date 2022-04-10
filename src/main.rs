@@ -5,7 +5,10 @@ use core::slice::Iter;
 
 use rand::{Rng, SeedableRng};
 
-use embedded_hal::spi::{Mode, Phase, Polarity};
+use embedded_hal::{
+    adc::Channel,
+    spi::{Mode, Phase, Polarity},
+};
 use rand_chacha::ChaCha20Rng;
 use smart_leds::brightness;
 
@@ -88,7 +91,7 @@ impl PointIndexMapping for LedPanels {
                 self.panel_size.columns - x - 1
             } else {
                 x
-            } 
+            }
             // move to the right panel
             + panel * self.panel_size.rows * self.panel_size.columns
             // place on the correct column
@@ -120,6 +123,10 @@ struct SnakeMove {
 
 trait SnakeController {
     fn next_move(&mut self, snake: &Snake) -> SnakeMove;
+
+    fn step(&mut self, adc: &mut Adc);
+
+    fn reset(&mut self);
 }
 
 struct Snake {
@@ -176,31 +183,33 @@ impl Snake {
         self.move_to(&controller.next_move(self));
     }
 
-
     fn size(&self) -> usize {
         self.current_size
     }
 }
 
 struct TestSnakeMover {
+    start_direction: Direction,
     direction: Direction,
-    rnd: ChaCha20Rng
+    rnd: ChaCha20Rng,
 }
 
 impl TestSnakeMover {
     fn new(direction: Direction, random_seed: u64) -> Self {
         Self {
             direction,
+            start_direction: direction,
             rnd: rand_chacha::ChaChaRng::seed_from_u64(random_seed),
         }
     }
 }
 
 impl SnakeController for TestSnakeMover {
+    fn reset(&mut self) {
+        self.direction = self.start_direction;
+    }
 
-    fn next_move(&mut self, snake: &Snake) ->SnakeMove {
-        let head = snake.get_head();
-
+    fn step(&mut self, _adc: &mut Adc) {
         // pick a random direction to turn to:
         self.direction = match self.rnd.gen_range(0_i32..10_i32) {
             0 => {
@@ -223,29 +232,32 @@ impl SnakeController for TestSnakeMover {
             }
             _ => self.direction, // no turn
         };
+    }
+
+    fn next_move(&mut self, snake: &Snake) -> SnakeMove {
+        let head = snake.get_head();
 
         // compute new head
-    let head = match self.direction {
-        Direction::Up => Point {
-            x: head.x,
-            y: head.y + 1,
-        },
-        Direction::Down => Point {
-            x: head.x,
-            y: head.y.wrapping_sub(1),
-        },
-        Direction::Left => Point {
-            x: head.x.wrapping_sub(1),
-            y: head.y,
-        },
-        Direction::Right => Point {
-            x: head.x + 1,
-            y: head.y,
-        },
-    };
+        let head = match self.direction {
+            Direction::Up => Point {
+                x: head.x,
+                y: head.y + 1,
+            },
+            Direction::Down => Point {
+                x: head.x,
+                y: head.y.wrapping_sub(1),
+            },
+            Direction::Left => Point {
+                x: head.x.wrapping_sub(1),
+                y: head.y,
+            },
+            Direction::Right => Point {
+                x: head.x + 1,
+                y: head.y,
+            },
+        };
 
         // resolve wrapping
-
         let point = Point {
             x: head.x % 32,
             y: head.y % 16,
@@ -262,12 +274,121 @@ impl SnakeController for TestSnakeMover {
     }
 }
 
-struct Game {
+struct JoystickMover<UdPin, LrPin> {
+    start_direction: Direction,
+    direction: Direction,
+    ud_pin: UdPin,
+    lr_pin: LrPin,
+}
+
+impl<UdPin, LrPin> JoystickMover<UdPin, LrPin> {
+    fn new(direction: Direction, lr_pin: LrPin, ud_pin: UdPin) -> Self {
+        Self {
+            start_direction: direction,
+            direction,
+            ud_pin,
+            lr_pin,
+        }
+    }
+}
+
+impl<UdPin, LrPin> SnakeController for JoystickMover<UdPin, LrPin>
+where
+    UdPin: Channel<Adc, ID = u8>,
+    LrPin: Channel<Adc, ID = u8>,
+{
+    fn reset(&mut self) {
+        self.direction = self.start_direction;
+    }
+
+    fn step(&mut self, adc: &mut Adc) {
+        let ud = adc.read_abs_mv(&mut self.ud_pin);
+        let lr = adc.read_abs_mv(&mut self.lr_pin);
+
+        // find out which axes has the max deviation from 3.3v
+        // == 1650 mv
+        const MID_V: u16 = 1650;
+        const DEADZONE: u16 = 500; // MV to conside deadzone
+
+        let lr_diff = if lr > MID_V { lr - MID_V } else { MID_V - lr };
+        let ud_diff = if ud > MID_V { ud - MID_V } else { MID_V - ud };
+
+        let direction = if lr_diff > ud_diff {
+            if lr_diff <= DEADZONE {
+                None
+            } else if lr < MID_V {
+                Some(Direction::Left)
+            } else {
+                Some(Direction::Right)
+            }
+        } else {
+            if ud_diff <= DEADZONE {
+                None
+            } else if ud < MID_V {
+                Some(Direction::Down)
+            } else {
+                Some(Direction::Up)
+            }
+        };
+
+        match direction {
+            Some(Direction::Left) if self.direction != Direction::Right => {
+                self.direction = direction.unwrap()
+            }
+            Some(Direction::Right) if self.direction != Direction::Left => {
+                self.direction = direction.unwrap()
+            }
+            Some(Direction::Up) if self.direction != Direction::Down => {
+                self.direction = direction.unwrap()
+            }
+            Some(Direction::Down) if self.direction != Direction::Up => {
+                self.direction = direction.unwrap()
+            }
+            _ => {}
+        }
+    }
+
+    fn next_move(&mut self, snake: &Snake) -> SnakeMove {
+        let head = snake.get_head();
+        let head = match self.direction {
+            Direction::Up => Point {
+                x: head.x,
+                y: head.y + 1,
+            },
+            Direction::Down => Point {
+                x: head.x,
+                y: head.y.wrapping_sub(1),
+            },
+            Direction::Left => Point {
+                x: head.x.wrapping_sub(1),
+                y: head.y,
+            },
+            Direction::Right => Point {
+                x: head.x + 1,
+                y: head.y,
+            },
+        };
+        let point = Point {
+            x: head.x % 32,
+            y: head.y % 16,
+        };
+        SnakeMove {
+            point,
+            style: if snake.size() < 15 {
+                SnakeMoveStyle::Grow
+            } else {
+                SnakeMoveStyle::Move
+            },
+        }
+    }
+}
+
+struct Game<ControllerA, ControllerB> {
     snake_a: Snake,
-    snake_a_controller: TestSnakeMover,
+    snake_a_controller: ControllerA,
 
     snake_b: Snake,
-    snake_b_controller: TestSnakeMover,
+    snake_b_controller: ControllerB,
 }
 
 #[derive(PartialEq)]
@@ -276,15 +397,18 @@ enum Collision {
     Collision(Point),
 }
 
-impl Game {
-    fn new(random_seed: u64) -> Self {
-        let mut rng = rand_chacha::ChaChaRng::seed_from_u64(random_seed);
+impl<ControllerA, ControllerB> Game<ControllerA, ControllerB>
+where
+    ControllerA: SnakeController,
+    ControllerB: SnakeController,
+{
+    fn new(snake_a_controller: ControllerA, snake_b_controller: ControllerB) -> Self {
         Self {
             snake_a: Snake::new(Point { x: 8, y: 8 }, [0xFF_u8, 0xFF_u8, 0_u8].into()),
-            snake_a_controller: TestSnakeMover::new(Direction::Right, rng.gen()),
+            snake_a_controller: snake_a_controller,
 
             snake_b: Snake::new(Point { x: 25, y: 8 }, [0_u8, 0xFF_u8, 0xFF_u8].into()),
-            snake_b_controller: TestSnakeMover::new(Direction::Left, rng.gen()),
+            snake_b_controller: snake_b_controller,
         }
     }
 
@@ -311,40 +435,45 @@ impl Game {
 
         for tail_point in self.snake_a.iter().skip(1) {
             if head == *tail_point {
-                return Collision::Collision(head)
+                return Collision::Collision(head);
             }
         }
         for tail_point in self.snake_b.iter() {
             if head == *tail_point {
-                return Collision::Collision(head)
+                return Collision::Collision(head);
             }
         }
 
         let head = self.snake_b.get_head();
-        
+
         for tail_point in self.snake_a.iter() {
             if head == *tail_point {
-                return Collision::Collision(head)
+                return Collision::Collision(head);
             }
         }
         for tail_point in self.snake_b.iter().skip(1) {
             if head == *tail_point {
-                return Collision::Collision(head)
+                return Collision::Collision(head);
             }
         }
 
         Collision::None
     }
 
-    fn step(&mut self) {
+    fn step(&mut self, adc: &mut Adc) {
+        self.snake_a_controller.step(adc);
+        self.snake_b_controller.step(adc);
+
         self.snake_a.move_step(&mut self.snake_a_controller);
         self.snake_b.move_step(&mut self.snake_b_controller);
     }
 
-
     fn reset(&mut self) {
-       self.snake_a = Snake::new(Point { x: 8, y: 8 }, [0xFF_u8, 0xFF_u8, 0_u8].into());
-       self.snake_b = Snake::new(Point { x: 25, y: 8 }, [0_u8, 0xFF_u8, 0xFF_u8].into());
+        self.snake_a = Snake::new(Point { x: 8, y: 7 }, [0xFF_u8, 0xFF_u8, 0_u8].into());
+        self.snake_b = Snake::new(Point { x: 25, y: 9 }, [0_u8, 0xFF_u8, 0xFF_u8].into());
+
+        self.snake_a_controller.reset();
+        self.snake_b_controller.reset();
     }
 }
 
@@ -372,20 +501,20 @@ fn main() -> ! {
         .sysclk(48.mhz())
         .freeze(&mut pac_peripherals.FLASH);
 
-    rprintln!("SClock: {} Hz", rcc.clocks.sysclk().0);
-    rprintln!("PClock: {} Hz", rcc.clocks.pclk().0);
-
-    //rprintln!("PClock: {} Hz", pac_peripherals.)
-
     let mut delay = Delay::new(cortex_peripherals.SYST, &rcc);
 
     let gpioa = pac_peripherals.GPIOA.split(&mut rcc);
 
-    let (sck, miso, mosi) = cortex_m::interrupt::free(move |cs| {
+    let (sck, miso, mosi, a0, a1, a2, a3) = cortex_m::interrupt::free(move |cs| {
         (
             gpioa.pa5.into_alternate_af0(cs),
             gpioa.pa6.into_alternate_af0(cs),
             gpioa.pa7.into_alternate_af0(cs),
+            // Analoog bits
+            gpioa.pa0.into_analog(cs),
+            gpioa.pa1.into_analog(cs),
+            gpioa.pa2.into_analog(cs),
+            gpioa.pa3.into_analog(cs),
         )
     });
 
@@ -406,13 +535,18 @@ fn main() -> ! {
 
     let panel = LedPanels::new_16x16(2);
     let mut adc = Adc::new(pac_peripherals.ADC, &mut rcc);
-    let random_seed = poor_random(&mut adc);
 
-    let mut game = Game::new(random_seed);
+    //let mut rng = rand_chacha::ChaChaRng::seed_from_u64(poor_random(&mut adc));
+
+    let controller_a = JoystickMover::new(Direction::Right, a0, a1);
+    let controller_b = JoystickMover::new(Direction::Left, a2, a3);
+    //let controller_b = TestSnakeMover::new(Direction::Left, rng.gen());
+
+    let mut game = Game::new(controller_a, controller_b);
 
     rprintln!("Ready to run.");
     loop {
-        game.step();
+        game.step(&mut adc);
 
         // display snake
         let mut data = [RGB8::default(); NUM_LEDS];
@@ -421,11 +555,11 @@ fn main() -> ! {
 
         let collision = game.check_collision();
         if let Collision::Collision(p) = collision {
-           if let Some(idx) = panel.get_coordinate(&p) {
-              data[idx] = [0xFF_u8, 0_u8, 0_u8].into();
-           }
+            if let Some(idx) = panel.get_coordinate(&p) {
+                data[idx] = [0xFF_u8, 0_u8, 0_u8].into();
+            }
         }
-        
+
         spi.write(brightness(data.iter().cloned(), 10)).unwrap();
         delay.delay_ms(70_u32);
 
