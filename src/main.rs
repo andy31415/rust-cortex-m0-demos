@@ -52,10 +52,6 @@ impl<SPI: Write<u8>> LedDisplay<SPI> {
         }
     }
 
-    fn clear(&mut self) {
-        self.frame_buffer.fill(RGB8::default());
-    }
-
     fn flush(&mut self) {
         self.writer.write(self.frame_buffer.iter().cloned()).ok();
     }
@@ -89,7 +85,7 @@ impl<SPI: Write<u8>> DrawTarget for LedDisplay<SPI> {
     type Color = Rgb888;
     type Error = DrawError;
 
-    fn draw_iter<I>(&mut self, data: I) -> Result<(), <Self as DrawTarget>::Error>
+    fn draw_iter<I>(&mut self, data: I) -> Result<(), DrawError>
     where
         I: IntoIterator<Item = Pixel<Rgb888>>,
     {
@@ -98,6 +94,12 @@ impl<SPI: Write<u8>> DrawTarget for LedDisplay<SPI> {
             self.frame_buffer[idx] = [color.r(), color.g(), color.b()].into();
         }
 
+        Ok(())
+    }
+
+    fn clear(&mut self, color: Rgb888) -> Result<(), DrawError> {
+        self.frame_buffer
+            .fill([color.r(), color.g(), color.b()].into());
         Ok(())
     }
 }
@@ -211,7 +213,7 @@ fn main() -> ! {
         }
         circle_x += circle_move;
 
-        display.clear();
+        display.clear(Rgb888::BLACK).ok();
 
         Text::with_alignment("Rust", Point::new(0, 6), font_style, Alignment::Left)
             .draw(&mut display)
