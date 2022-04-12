@@ -4,8 +4,8 @@
 use crate::hal::spi::Mode;
 use cortex_m::Peripherals;
 use embedded_graphics::draw_target::DrawTarget;
-use embedded_graphics::mono_font::ascii::FONT_6X9;
-use embedded_graphics::mono_font::iso_8859_2::FONT_4X6;
+
+use embedded_graphics::mono_font::ascii::FONT_4X6;
 use embedded_graphics::mono_font::MonoTextStyleBuilder;
 use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::prelude::OriginDimensions;
@@ -14,9 +14,8 @@ use embedded_graphics::prelude::Size;
 use embedded_graphics::primitives::Circle;
 use embedded_graphics::Pixel;
 use embedded_graphics::{
-    mono_font::MonoTextStyle,
     prelude::*,
-    primitives::{PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, StrokeAlignment, Triangle},
+    primitives::{PrimitiveStyleBuilder, StrokeAlignment},
     text::{Alignment, Text},
 };
 use panic_rtt_target as _;
@@ -57,7 +56,7 @@ impl<SPI: Write<u8>> LedDisplay<SPI> {
     }
 
     fn index_top_left(&self, x: i32, y: i32) -> Result<usize, DrawError> {
-        if (x < 0) || (x >= 16) || (y < 0) || (y >= 16) {
+        if !(0..=15).contains(&x) || !(0..=15).contains(&y) {
             return Err(DrawError::OutOfBounds);
         }
         let x = x as usize;
