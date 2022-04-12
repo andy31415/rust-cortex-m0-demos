@@ -37,6 +37,24 @@ struct Point {
     y: usize,
 }
 
+impl Point {
+    fn is_higher_than(&self, other: &Point) -> bool {
+        self.y > other.y
+    }
+
+    fn is_lower_than(&self, other: &Point) -> bool {
+        self.y < other.y
+    }
+
+    fn is_left_of(&self, other: &Point) -> bool {
+        self.x < other.x
+    }
+
+    fn is_right_of(&self, other: &Point) -> bool {
+        self.x > other.x
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PanelSize {
     rows: usize,
@@ -111,6 +129,26 @@ enum Direction {
     Right,
 }
 
+impl Direction {
+    fn left(&self) -> Direction {
+        match self {
+            Direction::Up => Direction::Left,
+            Direction::Left => Direction::Down,
+            Direction::Down => Direction::Right,
+            Direction::Right => Direction::Up,
+        }
+    }
+
+    fn right(&self) -> Direction {
+        match self {
+            Direction::Up => Direction::Right,
+            Direction::Right => Direction::Down,
+            Direction::Down => Direction::Left,
+            Direction::Left => Direction::Up,
+        }
+    }
+}
+
 enum SnakeMoveStyle {
     Move,
     Grow,
@@ -126,10 +164,18 @@ enum Powerup {
     Apple, // makes the snake grow
 }
 
+trait SnakeAiInfo {
+    // where should the AI head to
+    fn goal(&self) -> Point;
+
+    // will it collide
+    fn will_collide(&self, point: &Point) -> bool;
+}
+
 trait SnakeController {
     fn next_move(&mut self, snake: &Snake) -> SnakeMove;
 
-    fn step(&mut self, adc: &mut Adc);
+    fn step(&mut self, snake: &Snake, ai_info: &dyn SnakeAiInfo, adc: &mut Adc);
 
     fn reset(&mut self);
 
@@ -195,14 +241,14 @@ impl Snake {
     }
 }
 
-struct TestSnakeMover {
+struct ComputerSnakeMover {
     start_direction: Direction,
     direction: Direction,
     rnd: ChaCha20Rng,
     target_size: usize,
 }
 
-impl TestSnakeMover {
+impl ComputerSnakeMover {
     fn new(direction: Direction, random_seed: u64) -> Self {
         Self {
             direction,
@@ -211,9 +257,64 @@ impl TestSnakeMover {
             target_size: 5,
         }
     }
+
+    fn turn_towards(&mut self, head: &Point, goal: &Point) -> Direction {
+        let is_good_direction = |d: Direction| -> bool {
+            ((d == Direction::Left) && goal.is_left_of(head))
+                || ((d == Direction::Right) && goal.is_right_of(head))
+                || ((d == Direction::Up) && goal.is_higher_than(head))
+                || ((d == Direction::Down) && goal.is_lower_than(head))
+        };
+
+        // prefer to stay on the path
+        if is_good_direction(self.direction) {
+            return self.direction;
+        }
+
+        // if not a good direction, Exactly one of the remaining ones should be better
+        // unless we have to turn around
+        if is_good_direction(self.direction.left()) {
+            return self.direction.left();
+        } else if is_good_direction(self.direction.right()) {
+            return self.direction.right();
+        }
+
+        // have to turn around. Pick randomly
+        if self.rnd.gen_ratio(1, 2) {
+            self.direction.left()
+        } else {
+            self.direction.right()
+        }
+    }
 }
 
-impl SnakeController for TestSnakeMover {
+fn next_point(point: &Point, direction: Direction) -> Point {
+    let point = match direction {
+        Direction::Up => Point {
+            x: point.x,
+            y: point.y + 1,
+        },
+        Direction::Down => Point {
+            x: point.x,
+            y: point.y.wrapping_sub(1),
+        },
+        Direction::Left => Point {
+            x: point.x.wrapping_sub(1),
+            y: point.y,
+        },
+        Direction::Right => Point {
+            x: point.x + 1,
+            y: point.y,
+        },
+    };
+
+    Point {
+        x: point.x % 32,
+        y: point.y % 16,
+    }
+}
+
+impl SnakeController for ComputerSnakeMover {
     fn eat(&mut self, powerup: Powerup) {
         match powerup {
             Powerup::Apple => self.target_size += 4,
@@ -225,59 +326,61 @@ impl SnakeController for TestSnakeMover {
         self.target_size = 5;
     }
 
-    fn step(&mut self, _adc: &mut Adc) {
-        // pick a random direction to turn to:
-        self.direction = match self.rnd.gen_range(0_i32..10_i32) {
-            0 => {
-                // Turn left
-                match self.direction {
-                    Direction::Up => Direction::Left,
-                    Direction::Left => Direction::Down,
-                    Direction::Down => Direction::Right,
-                    Direction::Right => Direction::Up,
+    fn step(&mut self, snake: &Snake, ai_data: &dyn SnakeAiInfo, _adc: &mut Adc) {
+        // TODO: are we heading towards an apple
+        //       are we coliding?
+
+        let mut target = self.direction;
+
+        let head = snake.get_head();
+
+        // HIGH chance to move towards apple
+        if self.rnd.gen_ratio(8, 10) {
+            target = self.turn_towards(&head, &ai_data.goal());
+
+            if target != self.direction {
+                rprintln!(
+                    "Turned from {:?} to {:?} (heading from {:?} to {:?}",
+                    self.direction,
+                    target,
+                    head,
+                    ai_data.goal()
+                );
+            }
+        }
+
+        if ai_data.will_collide(&next_point(&head, target)) {
+            // try one of keep direction or turn to avoid hitting something
+            rprintln!("Avoiding collision");
+
+            if !ai_data.will_collide(&next_point(&head, self.direction)) {
+                rprintln!(" => Keeping direction");
+                target = self.direction;
+            } else {
+                let choices = if self.rnd.gen_ratio(1, 2) {
+                    [self.direction.left(), self.direction.right()]
+                } else {
+                    [self.direction.right(), self.direction.left()]
+                };
+
+                if !ai_data.will_collide(&next_point(&head, choices[0])) {
+                    rprintln!(" => Turn {:?}", choices[0]);
+                    target = choices[0];
+                } else if !ai_data.will_collide(&next_point(&head, choices[1])) {
+                    rprintln!(" => Turn {:?}", choices[1]);
+                    target = choices[1];
+                } else {
+                    rprintln!(" => CANNOT AVOID!");
+                    target = self.direction; // we will colide, just keep going straight
                 }
             }
-            1 => {
-                // Turn right
-                match self.direction {
-                    Direction::Up => Direction::Right,
-                    Direction::Left => Direction::Up,
-                    Direction::Down => Direction::Left,
-                    Direction::Right => Direction::Down,
-                }
-            }
-            _ => self.direction, // no turn
-        };
+        }
+
+        self.direction = target;
     }
 
     fn next_move(&mut self, snake: &Snake) -> SnakeMove {
-        let head = snake.get_head();
-
-        // compute new head
-        let head = match self.direction {
-            Direction::Up => Point {
-                x: head.x,
-                y: head.y + 1,
-            },
-            Direction::Down => Point {
-                x: head.x,
-                y: head.y.wrapping_sub(1),
-            },
-            Direction::Left => Point {
-                x: head.x.wrapping_sub(1),
-                y: head.y,
-            },
-            Direction::Right => Point {
-                x: head.x + 1,
-                y: head.y,
-            },
-        };
-
-        // resolve wrapping
-        let point = Point {
-            x: head.x % 32,
-            y: head.y % 16,
-        };
+        let point = next_point(&snake.get_head(), self.direction);
 
         SnakeMove {
             point,
@@ -320,7 +423,7 @@ where
         self.target_size = 5;
     }
 
-    fn step(&mut self, adc: &mut Adc) {
+    fn step(&mut self, _snake: &Snake, _ai_data: &dyn SnakeAiInfo, adc: &mut Adc) {
         let ud = adc.read_abs_mv(&mut self.ud_pin);
         let lr = adc.read_abs_mv(&mut self.lr_pin);
 
@@ -368,29 +471,7 @@ where
     }
 
     fn next_move(&mut self, snake: &Snake) -> SnakeMove {
-        let head = snake.get_head();
-        let head = match self.direction {
-            Direction::Up => Point {
-                x: head.x,
-                y: head.y + 1,
-            },
-            Direction::Down => Point {
-                x: head.x,
-                y: head.y.wrapping_sub(1),
-            },
-            Direction::Left => Point {
-                x: head.x.wrapping_sub(1),
-                y: head.y,
-            },
-            Direction::Right => Point {
-                x: head.x + 1,
-                y: head.y,
-            },
-        };
-        let point = Point {
-            x: head.x % 32,
-            y: head.y % 16,
-        };
+        let point = next_point(&snake.get_head(), self.direction);
         SnakeMove {
             point,
             style: if snake.size() < self.target_size {
@@ -423,6 +504,26 @@ struct Game<ControllerA, ControllerB, GameRng> {
     snake_b_controller: ControllerB,
 
     apple: Point,
+}
+
+struct GameAiInfo<'a> {
+    apple: Point,
+    snake_a: &'a Snake,
+    snake_b: &'a Snake,
+}
+
+impl SnakeAiInfo for GameAiInfo<'_> {
+    fn goal(&self) -> Point {
+        self.apple
+    }
+
+    fn will_collide(&self, point: &Point) -> bool {
+        self.snake_a
+            .iter()
+            .chain(self.snake_b.iter())
+            .find(|&&x| x == *point)
+            .is_some()
+    }
 }
 
 #[derive(PartialEq)]
@@ -479,26 +580,14 @@ where
 
     fn display<MAPPER: PointIndexMapping>(&self, panel: &MAPPER, data: &mut [RGB8; NUM_LEDS]) {
         for point in self.snake_a.iter() {
-            if let Some(idx) = panel.get_coordinate(point) {
-                data[idx] = self.snake_a.color;
-            } else {
-                rprintln!("Error for index {:?}", point);
-            }
+            data[panel.get_coordinate(point).unwrap()] = self.snake_a.color;
         }
 
         for point in self.snake_b.iter() {
-            if let Some(idx) = panel.get_coordinate(point) {
-                data[idx] = self.snake_b.color;
-            } else {
-                rprintln!("Error for index {:?}", point);
-            }
+            data[panel.get_coordinate(point).unwrap()] = self.snake_b.color;
         }
 
-        if let Some(idx) = panel.get_coordinate(&self.apple) {
-            data[idx] = APPLE_COLOR;
-        } else {
-            rprintln!("Error for index {:?}", self.apple);
-        }
+        data[panel.get_coordinate(&self.apple).unwrap()] = APPLE_COLOR;
     }
 
     fn check_collision(&self) -> Collision {
@@ -532,8 +621,14 @@ where
     }
 
     fn step(&mut self, adc: &mut Adc) {
-        self.snake_a_controller.step(adc);
-        self.snake_b_controller.step(adc);
+        let ai_info = GameAiInfo {
+            apple: self.apple,
+            snake_a: &self.snake_a,
+            snake_b: &self.snake_b,
+        };
+
+        self.snake_a_controller.step(&self.snake_a, &ai_info, adc);
+        self.snake_b_controller.step(&self.snake_b, &ai_info, adc);
 
         self.snake_a.move_step(&mut self.snake_a_controller);
         self.snake_b.move_step(&mut self.snake_b_controller);
@@ -554,6 +649,8 @@ where
 
         self.snake_a_controller.reset();
         self.snake_b_controller.reset();
+
+        self.new_apple();
     }
 }
 
@@ -618,6 +715,8 @@ fn main() -> ! {
 
     let controller_a = JoystickMover::new(Direction::Right, a0, a1);
     let controller_b = JoystickMover::new(Direction::Left, a2, a3);
+    //let controller_a = ComputerSnakeMover::new(Direction::Right, poor_random(&mut adc));
+    //let controller_b = ComputerSnakeMover::new(Direction::Left, poor_random(&mut adc));
 
     let mut game = Game::new(
         controller_a,
