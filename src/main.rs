@@ -30,12 +30,11 @@ use crate::hal::{delay::Delay, pac, prelude::*};
 
 use rtt_target::{rprintln, rtt_init_print};
 
-use embedded_hal::blocking::spi::Write;
 use embedded_hal::spi::{Phase, Polarity};
 use ws2812_blocking_spi::Ws2812BlockingWriter;
 
-struct LedDisplay<SPI: Write<u8>> {
-    writer: Ws2812BlockingWriter<SPI>,
+struct LedDisplay<Writer: SmartLedsWrite<Color = RGB8>> {
+    writer: Writer,
     frame_buffer: [RGB8; 16 * 16],
 }
 
@@ -43,8 +42,8 @@ enum DrawError {
     OutOfBounds,
 }
 
-impl<SPI: Write<u8>> LedDisplay<SPI> {
-    fn new(writer: Ws2812BlockingWriter<SPI>) -> Self {
+impl<Writer: SmartLedsWrite<Color = RGB8>> LedDisplay<Writer> {
+    fn new(writer: Writer) -> Self {
         Self {
             writer,
             frame_buffer: [RGB8::default(); 16 * 16],
@@ -74,13 +73,12 @@ impl<SPI: Write<u8>> LedDisplay<SPI> {
     }
 }
 
-impl<SPI: Write<u8>> OriginDimensions for LedDisplay<SPI> {
+impl<Writer: SmartLedsWrite<Color = RGB8>> OriginDimensions for LedDisplay<Writer> {
     fn size(&self) -> Size {
         Size::new(16, 16)
     }
 }
-
-impl<SPI: Write<u8>> DrawTarget for LedDisplay<SPI> {
+impl<Writer: SmartLedsWrite<Color = RGB8>> DrawTarget for LedDisplay<Writer> {
     type Color = Rgb888;
     type Error = DrawError;
 
