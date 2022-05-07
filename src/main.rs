@@ -4,10 +4,12 @@
 use core::cell::RefCell;
 use core::ops::DerefMut;
 
-use crate::hal::time::Hertz;
 use cortex_m::interrupt::free;
 use cortex_m::interrupt::Mutex;
-use cortex_m::Peripherals;
+
+use hal::gpio::Output;
+use hal::gpio::PushPull;
+use hal::time::KiloHertz;
 use hal::timers::Timer;
 use panic_rtt_target as _;
 
@@ -17,7 +19,7 @@ use hal::stm32::Interrupt;
 use stm32f0::stm32f0x0::TIM3;
 use stm32f0xx_hal as hal;
 
-use crate::hal::{delay::Delay, pac, prelude::*};
+use crate::hal::{pac, prelude::*};
 
 use rtt_target::{rprintln, rtt_init_print};
 
@@ -79,6 +81,10 @@ mod a4988 {
             Ok(())
         }
 
+        pub fn is_idle(&self) -> bool {
+            self.state == State::Idle
+        }
+
         pub fn step(&mut self) -> Result<MotorMovingState, ControlPin::Error> {
             match self.state {
                 State::Idle => return Ok(MotorMovingState::Idle),
@@ -111,6 +117,8 @@ mod a4988 {
 }
 
 static MOTOR_TIMER: Mutex<RefCell<Option<Timer<TIM3>>>> = Mutex::new(RefCell::new(None));
+static MOTOR1: Mutex<RefCell<Option<a4988::Motor<hal::gpio::gpiob::PB3<Output<PushPull>>>>>> =
+    Mutex::new(RefCell::new(None));
 
 // Move:
 //   turn(degrees).in(ms)
@@ -122,12 +130,31 @@ static MOTOR_TIMER: Mutex<RefCell<Option<Timer<TIM3>>>> = Mutex::new(RefCell::ne
 //    start_turning(steps, time_per_turn) -> Result (error if already turning)
 //    step() -> Result(done or not yet)
 
+fn global_motor_turn(steps: u32, ticks: u32) {
+    free(|cs| {
+        if let Some(ref mut m) = MOTOR1.borrow(cs).borrow_mut().deref_mut() {
+            if let Err(_) = m.start_turning(steps, ticks) {
+                rprintln!("ERROR STARTING TO TURN!");
+            }
+        }
+    });
+}
+
+fn global_motor_idle() -> bool {
+    free(|cs| {
+        if let Some(ref mut m) = MOTOR1.borrow(cs).borrow_mut().deref_mut() {
+            m.is_idle()
+        } else {
+            false
+        }
+    })
+}
+
 #[entry]
 fn main() -> ! {
     rtt_init_print!();
 
     let mut pac_peripherals = pac::Peripherals::take().unwrap();
-    let cortex_peripherals = Peripherals::take().unwrap();
 
     let mut rcc = pac_peripherals
         .RCC
@@ -135,21 +162,19 @@ fn main() -> ! {
         .sysclk(48.mhz())
         .freeze(&mut pac_peripherals.FLASH);
 
-    let mut delay = Delay::new(cortex_peripherals.SYST, &rcc);
-
     let gpiob = pac_peripherals.GPIOB.split(&mut rcc);
     let motor = cortex_m::interrupt::free(move |cs| gpiob.pb3.into_push_pull_output(cs));
 
-    let mut motor = a4988::Motor::new(motor);
+    let motor = a4988::Motor::new(motor);
 
     rprintln!("Ready to start");
 
-    //let mut t = Timer::tim1(pac_peripherals.TIM3, KiloHertz(1), &mut rcc);
-    let mut t3 = Timer::tim3(pac_peripherals.TIM3, Hertz(1), &mut rcc);
+    let mut t3 = Timer::tim3(pac_peripherals.TIM3, KiloHertz(1), &mut rcc);
     t3.listen(hal::timers::Event::TimeOut);
 
     free(|cs| {
         MOTOR_TIMER.borrow(cs).borrow_mut().replace(t3);
+        MOTOR1.borrow(cs).borrow_mut().replace(motor);
     });
 
     hal::pac::NVIC::unpend(Interrupt::TIM3);
@@ -158,39 +183,31 @@ fn main() -> ! {
     }
 
     // Full turn, 5 ticks per turn. At 1KHz this is 1rot/sec
-    motor.start_turning(200, 5).ok();
-
     let mut turns = 5;
+    global_motor_turn(200, turns);
 
     loop {
-        delay.delay_ms(1_u16);
-        match motor.step() {
-            Ok(a4988::MotorMovingState::Idle) => {
-                // Turn again
-                turns = 15 - turns;
-                motor.start_turning(200, turns).ok();
-            }
-            Ok(_) => {}
-            Err(_) => {
-                rprintln!("Error turning!");
-            }
+        if global_motor_idle() {
+            // Turn again
+            turns = 15 - turns;
+            global_motor_turn(200, turns);
+        } else {
+            cortex_m::asm::wfe();
         }
     }
 }
 
 #[interrupt]
 fn TIM3() {
-    static mut CNT: u32 = 0;
-    rprintln!("Interrupt {}", CNT);
-    *CNT += 1u32;
-
     hal::pac::NVIC::unpend(stm32f0::stm32f0x0::Interrupt::TIM3);
-
     free(|cs| {
         if let Some(ref mut t3) = MOTOR_TIMER.borrow(cs).borrow_mut().deref_mut() {
             t3.wait().ok(); // clear the wrapped bit
         }
+        if let Some(ref mut m) = MOTOR1.borrow(cs).borrow_mut().deref_mut() {
+            if let Err(_) = m.step() {
+                rprintln!("Error stepping!");
+            }
+        }
     })
-
-    // TODO: pending clear
 }
