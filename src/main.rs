@@ -169,7 +169,7 @@ fn main() -> ! {
 
     rprintln!("Ready to start");
 
-    let mut t3 = Timer::tim3(pac_peripherals.TIM3, KiloHertz(1), &mut rcc);
+    let mut t3 = Timer::tim3(pac_peripherals.TIM3, KiloHertz(100), &mut rcc);
     t3.listen(hal::timers::Event::TimeOut);
 
     free(|cs| {
@@ -182,15 +182,17 @@ fn main() -> ! {
         hal::pac::NVIC::unmask(Interrupt::TIM3);
     }
 
-    // Full turn, 5 ticks per turn. At 1KHz this is 1rot/sec
-    let mut turns = 5;
-    global_motor_turn(200, turns);
+    // at quad:
+    // 100KHz
+    // 200*16 steps/sec = 3200
+    let mut ticks = 31;
+    let turns = 16 * 200;
+    global_motor_turn(turns, ticks);
 
     loop {
         if global_motor_idle() {
-            // Turn again
-            turns = 15 - turns;
-            global_motor_turn(200, turns);
+            ticks = 93 - ticks;
+            global_motor_turn(turns, ticks);
         } else {
             cortex_m::asm::wfe();
         }
