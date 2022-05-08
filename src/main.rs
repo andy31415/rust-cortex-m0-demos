@@ -241,7 +241,7 @@ fn main() -> ! {
             tick_count = 93u32 - tick_count;
             global_motor_turn(turn_count.turn_steps(), tick_count.ticks());
         } else {
-            cortex_m::asm::wfe();
+            cortex_m::asm::wfi();
         }
     }
 }
