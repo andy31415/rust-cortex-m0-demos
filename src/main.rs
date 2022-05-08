@@ -32,6 +32,24 @@ mod a4988 {
         StepsUntilPulse(u32),
     }
 
+    impl Steps {
+        pub fn count(&self) -> u32 {
+            self.0
+        }
+    }
+
+    #[derive(PartialEq, Copy, Clone)]
+    pub struct Ticks(pub u32);
+
+    impl Ticks {
+        pub fn count(&self) -> u32 {
+            self.0
+        }
+    }
+
+    #[derive(PartialEq, Copy, Clone)]
+    pub struct Steps(pub u32);
+
     pub enum StateError {
         AlreadyTurning,
         NeedMoreTicksPerStep,
@@ -45,7 +63,7 @@ mod a4988 {
     #[derive(PartialEq)]
     enum State {
         Idle,
-        Moving { steps_left: u32, ticks: u32 },
+        Moving { steps: Steps, ticks: Ticks },
     }
 
     pub struct Motor<ControlPin: OutputPin> {
@@ -63,18 +81,18 @@ mod a4988 {
             }
         }
 
-        pub fn start_turning(&mut self, steps: u32, ticks_per_step: u32) -> Result<(), StateError> {
+        pub fn start_turning(&mut self, steps: Steps, ticks: Ticks) -> Result<(), StateError> {
             if self.state != State::Idle {
                 return Err(StateError::AlreadyTurning);
             }
 
-            if ticks_per_step < 1 {
+            if ticks.count() < 1 {
                 return Err(StateError::NeedMoreTicksPerStep);
             }
 
             self.state = State::Moving {
-                steps_left: steps,
-                ticks: ticks_per_step - 1,
+                steps,
+                ticks: Ticks(ticks.count() - 1),
             };
             self.pulse = Pulse::StepsUntilPulse(0); // next pulse will happen now
 
@@ -88,19 +106,19 @@ mod a4988 {
         pub fn step(&mut self) -> Result<MotorMovingState, ControlPin::Error> {
             match self.state {
                 State::Idle => return Ok(MotorMovingState::Idle),
-                State::Moving { steps_left, ticks } => {
+                State::Moving { steps, ticks } => {
                     self.pulse = match self.pulse {
                         Pulse::PulseHigh => {
                             self.control.set_low()?;
-                            Pulse::StepsUntilPulse(ticks)
+                            Pulse::StepsUntilPulse(ticks.count())
                         }
                         Pulse::StepsUntilPulse(0) => {
-                            if steps_left == 0 {
+                            if steps.count() == 0 {
                                 self.state = State::Idle;
                                 return Ok(MotorMovingState::Idle);
                             }
                             self.state = State::Moving {
-                                steps_left: steps_left - 1,
+                                steps: Steps(steps.count() - 1),
                                 ticks,
                             };
                             self.control.set_high()?;
@@ -133,7 +151,7 @@ static MOTOR1: Mutex<RefCell<Option<a4988::Motor<hal::gpio::gpiob::PB3<Output<Pu
 fn global_motor_turn(steps: u32, ticks: u32) {
     free(|cs| {
         if let Some(ref mut m) = MOTOR1.borrow(cs).borrow_mut().deref_mut() {
-            if let Err(_) = m.start_turning(steps, ticks) {
+            if let Err(_) = m.start_turning(a4988::Steps(steps), a4988::Ticks(ticks)) {
                 rprintln!("ERROR STARTING TO TURN!");
             }
         }
