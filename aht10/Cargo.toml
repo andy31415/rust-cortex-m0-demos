@@ -1,0 +1,19 @@
+[package]
+authors = ["Anthony Romano <romanoanthony061@gmail.com>"]
+categories = ["embedded", "hardware-support", "no-std"]
+description = "A platform agnostic driver to interface with the AHT10 temperature/humidity sensor"
+documentation = "https://github.com/heyitsanthony/aht10"
+keywords = ["embedded-hal-driver", "temperature", "humidity", "aht10"]
+license = "AGPL-3.0-or-later"
+name = "aht10"
+repository = "https://github.com/heyitsanthony/aht10"
+version = "0.0.1"
+
+[dependencies]
+embedded-hal = "0.2.3"
+rtt-target = {version = "0.3.1", features=["cortex-m"]}
+bitflags = "^1.1.0"
+
+[dev_dependencies]
+linux-embedded-hal = "0.2.2"
+rtt-target = {version = "0.3.1", features=["cortex-m"]}
