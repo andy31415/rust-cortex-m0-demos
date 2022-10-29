@@ -39,19 +39,8 @@ spi-constants = { path = "spi_constants" }
 # a4988_step_motor_driver
 stm32f0 = "0.14.0"
 
-
-# Uncomment for the panic example.
-# panic-itm = "0.4.1"
-
-# Uncomment for the allocator example.
-# alloc-cortex-m = "0.4.0"
-
-# Uncomment for the device example.
-# Update `memory.x`, set target to `thumbv7em-none-eabihf` in `.cargo/config`,
-# and then use `cargo build --examples device` to build it.
-# [dependencies.stm32f3]
-# features = ["stm32f303", "rt"]
-# version = "0.7.1"
+# led_panel_graphics
+smart-leds-trait = "*"
 
 # this lets you use `cargo fix`!
 [[bin]]
