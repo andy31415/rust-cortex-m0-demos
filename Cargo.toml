@@ -13,6 +13,10 @@ rtt-target = {version = "0.3.1", features=["cortex-m"]}
 panic-rtt-target = {version = "0.1.2", features=["cortex-m"]}
 stm32f0xx-hal = { version = "0.18", features = ["stm32f030x8"]}
 
+[dev-dependencies]
+
+aht10 = { path = "/home/andrei/rust_development/aht10" }
+
 
 # Uncomment for the panic example.
 # panic-itm = "0.4.1"
@@ -37,3 +41,6 @@ bench = false
 codegen-units = 1 # better optimizations
 debug = true # symbols are nice and they don't increase the size on Flash
 lto = true # better optimizations
+
+
+
