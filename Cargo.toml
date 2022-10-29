@@ -16,7 +16,7 @@ stm32f0xx-hal = { version = "0.18", features = ["stm32f030x8"]}
 [dev-dependencies]
 
 # AHT10 example
-aht10 = { path = "/home/andrei/rust_development/aht10" }
+aht10 = { path = "aht10" }
 
 # LCD screen example
 ssd1306 = "*"
