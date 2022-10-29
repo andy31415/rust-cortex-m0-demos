@@ -30,6 +30,12 @@ ws2812-blocking-spi = "0.1.0"
 rand = {version = "*", default-features=false}
 rand_chacha = {version = "*", default-features=false}
 
+# Neopixel-demo
+ws2812-spi = "0.4.0"
+ws2812-timer-delay = {version = "0.3.0", features = ["slow"]}
+anyhow = { version = "*", default-features = false }
+spi-constants = { path = "spi_constants" }
+
 
 # Uncomment for the panic example.
 # panic-itm = "0.4.1"
